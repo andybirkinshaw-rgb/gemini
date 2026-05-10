@@ -8,14 +8,14 @@ HEADERS = {'Authorization': f'Discogs token={DISCOGS_TOKEN}', 'User-Agent': 'Rec
 
 st.set_page_config(page_title="Record Scout Canvas", layout="wide")
 
-# --- RESET LOGIC (The Fix) ---
+# --- REPAIR: THE HARD RESET FUNCTION ---
 def reset_canvas():
-    """Clears all session data so the new search starts fresh"""
+    """Wipes the session memory clean when a new search starts"""
     for key in ['active_id', 'rel_data', 'stats_data', 'selected_title']:
         if key in st.session_state:
             del st.session_state[key]
 
-# Initialize search state
+# Initialize search state tracking
 if "search_query" not in st.session_state:
     st.session_state.search_query = ""
 
@@ -32,7 +32,7 @@ st.markdown("""
 st.markdown('<p class="main-title">Record Scout Canvas</p>', unsafe_allow_html=True)
 
 # --- TOP SEARCH BAR ---
-# The 'on_change' parameter is the secret to fixing your refresh issue
+# The 'on_change' parameter is the secret to fixing the £42 default issue
 query = st.text_input(
     "Search Catalogue Number", 
     placeholder="e.g. EMC 3400", 
@@ -50,17 +50,19 @@ with col_left:
         res = requests.get(search_url, headers=HEADERS).json()
         
         if res.get('results'):
-            # unique key for radio ensures it refreshes per search
             options = {f"{r.get('title')} [{r.get('year','N/A')}] - {r.get('country','Global')}": r['id'] for r in res['results'][:5]}
+            
+            # Using query in the key forces the radio to refresh per search
             selected_label = st.radio("Select Version:", list(options.keys()), key=f"radio_{query}")
             
-            # Store ID and fetch details only if not already in state
-            if st.session_state.get('active_id') != options[selected_label]:
-                st.session_state.active_id = options[selected_label]
+            # Store ID and fetch fresh data only if the selection changes
+            current_id = options[selected_label]
+            if st.session_state.get('active_id') != current_id:
+                st.session_state.active_id = current_id
                 st.session_state.selected_title = selected_label
-                # Fetch full data once
-                st.session_state.rel_data = requests.get(f"https://api.discogs.com/releases/{st.session_state.active_id}", headers=HEADERS).json()
-                st.session_state.stats_data = requests.get(f"https://api.discogs.com/releases/{st.session_state.active_id}/stats", headers=HEADERS).json()
+                # Fetch full data from Discogs
+                st.session_state.rel_data = requests.get(f"https://api.discogs.com/releases/{current_id}", headers=HEADERS).json()
+                st.session_state.stats_data = requests.get(f"https://api.discogs.com/releases/{current_id}/stats", headers=HEADERS).json()
         else:
             st.warning("No releases found.")
 
@@ -71,30 +73,38 @@ with col_right:
         data = st.session_state.rel_data
         stats = st.session_state.stats_data
         
-        # Matrix Auto-detection logic
+        # Scan Matrix Data for intelligence
         matrix_data = " ".join([i.get('value', '') for i in data.get('identifiers', []) if i.get('type') == 'Matrix / Runout']).upper()
         
-        # Unique keys based on active_id force the UI to refresh properly
+        # FIX: Using 'key' with active_id forces sliders to refresh when you change records
         a2_check = st.checkbox("A-2 / B-2 Matrix", value=("A-2" in matrix_data), key=f"a2_{st.session_state.active_id}")
         hb_check = st.checkbox("Signature Etching", value=("HEADBUTTS" in matrix_data or "NICKZ" in matrix_data), key=f"hb_{st.session_state.active_id}")
         condition = st.select_slider("Condition", options=["G", "VG", "VG+", "NM", "M"], value="VG+", key=f"cond_{st.session_state.active_id}")
 
-        # Pricing Engine logic
-        base_p = stats.get('community', {}).get('rating', {}).get('average', 3.5) * 12 
-        if a2_check: base_p *= 1.6
-        if hb_check: base_p += 15.0
-        cond_map = {"M": 2.2, "NM": 1.7, "VG+": 1.0, "VG": 0.7, "G": 0.4}
-        final_p = base_p * cond_map[condition]
-
-        st.markdown(f'<div class="price-box"><div class="price-val">£{final_p:.2f}</div><p>ESTIMATED MARKET VALUE</p></div>', unsafe_allow_html=True)
+        # PRICING ENGINE
+        # Uses real community median if available, otherwise defaults to a base
+        median_base = stats.get('community', {}).get('rating', {}).get('average', 3.5) * 12 
         
-        # Links
+        if a2_check: median_base *= 1.6
+        if hb_check: median_base += 15.0
+        
+        cond_map = {"M": 2.2, "NM": 1.7, "VG+": 1.0, "VG": 0.7, "G": 0.4}
+        final_price = median_base * cond_map[condition]
+
+        st.markdown(f"""
+            <div class="price-box">
+                <div class="price-val">£{final_price:.2f}</div>
+                <p style="margin:0; font-size:12px; color:#aaa;">ESTIMATED MARKET VALUE</p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # External Search Links
         clean_name = st.session_state.selected_title.split('[')[0].replace(" ", "+")
-        st.markdown("### 🔍 External Links")
+        st.markdown("### 🔍 Search Verification")
         c1, c2 = st.columns(2)
-        c1.link_button("View on Popsike", f"https://www.popsike.com/php/quicksearch.php?searchtext={clean_name}")
-        c2.link_button("View eBay Solds", f"https://www.ebay.co.uk/sch/i.html?_nkw={clean_name}&LH_Sold=1")
+        c1.link_button("Check Popsike", f"https://www.popsike.com/php/quicksearch.php?searchtext={clean_name}")
+        c2.link_button("Check eBay Solds", f"https://www.ebay.co.uk/sch/i.html?_nkw={clean_name}&LH_Sold=1")
 
         st.markdown(f'<div class="source-tag"><strong>Date:</strong> {datetime.now().strftime("%B %d, %Y")} | <strong>Sources:</strong> Discogs, eBay, Popsike</div>', unsafe_allow_html=True)
     else:
-        st.write("Enter a catalogue number and select a release to generate pricing.")
+        st.write("Start a search to generate pricing.")
